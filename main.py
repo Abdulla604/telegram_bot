@@ -5,10 +5,11 @@ import sqlite3
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import CommandStart, CommandObject
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.exceptions import TelegramBadRequest
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8836453685:AAEJHWQHHv3Qni_k9dosQodq0cEUsG7PfSw")
 
-# Majburiy kanallar (Bot ADMIN bo'lishi shart!)
+# Majburiy kanallar ro'yxati (Bot bu kanallarda ADMIN bo'lishi shart!)
 CHANNELS = [
     "@yuristkonsult0",
     "@Yangirenessansyoshlari"
@@ -20,7 +21,7 @@ REQUIRED_REFERRALS = 5
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# DATABASE
+# --- DATABASE ---
 def init_db():
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
@@ -56,6 +57,7 @@ def increment_referral(referrer_id: int):
     conn.commit()
     conn.close()
 
+# --- CHECK SUBSCRIPTION ---
 async def check_subscriptions(user_id: int) -> bool:
     for channel in CHANNELS:
         try:
@@ -75,6 +77,7 @@ def get_subscribe_keyboard():
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+# --- HANDLERS ---
 @dp.message(CommandStart())
 async def start_handler(message: types.Message, command: CommandObject):
     user_id = message.from_user.id
@@ -127,7 +130,10 @@ async def show_main_menu(target, user_id: int):
     if isinstance(target, types.Message):
         await target.answer(text, parse_mode="Markdown", reply_markup=kb)
     else:
-        await target.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
+        try:
+            await target.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
+        except TelegramBadRequest:
+            await target.message.answer(text, parse_mode="Markdown", reply_markup=kb)
 
 @dp.callback_query(F.data == "check_sub")
 async def check_callback(callback: types.CallbackQuery):
@@ -148,6 +154,7 @@ async def check_callback(callback: types.CallbackQuery):
             await callback.message.delete()
         except Exception:
             pass
+            
         await show_main_menu(callback, user_id)
     else:
         await callback.answer("Siz hali barcha kanallarga obuna bo'lmadingiz! ❌", show_alert=True)
