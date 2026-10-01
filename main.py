@@ -4,12 +4,15 @@ import asyncio
 import sqlite3
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
-from aiogram.filters import CommandStart, CommandObject
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.filters import CommandStart, CommandObject, Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
-# TO'G'RI TOKEN (Bot ID va ikki nuqtasi bilan!)
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8836453685:AAHaNHQwiKxheUbClheEpJQJcSXX9036kNY")
+# TO'G'RI TOKEN
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8836453685:AAH-98gMP_sWlhgN_PT9PQoH_jKCN25lEsw")
+
+# ADMIN ID
+ADMIN_ID = 6505527953  
 
 CHANNELS = [
     "@yuristkonsult0",
@@ -72,17 +75,18 @@ def confirm_referral(invited_id: int):
 async def count_valid_referrals(referrer_id: int) -> int:
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT invited_id FROM referrals WHERE referrer_id = ?", (referrer_id,))
-    invited_users = cursor.fetchall()
+    cursor.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id = ? AND is_confirmed = 1", (referrer_id,))
+    count = cursor.fetchone()[0]
     conn.close()
+    return count
 
-    valid_count = 0
-    for row in invited_users:
-        invited_id = row[0]
-        if await check_subscriptions(invited_id):
-            valid_count += 1
-            
-    return valid_count
+def get_all_users():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM users")
+    users = cursor.fetchall()
+    conn.close()
+    return [u[0] for u in users]
 
 # --- CHECK SUBSCRIPTION ---
 async def check_subscriptions(user_id: int) -> bool:
@@ -103,6 +107,56 @@ def get_subscribe_keyboard():
         [InlineKeyboardButton(text="Obunani tekshirish 🔄", callback_data="check_sub")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+# --- HELP COMMAND ---
+@dp.message(Command("help"))
+async def help_handler(message: types.Message):
+    text = (
+        "❓ **Yordam va ko'rsatmalar:**\n\n"
+        "Bot bo'yicha savollar yoki texnik muammolar yuzasidan adminga murojaat qilishingiz mumkin:\n"
+        "👉 @prepgrants"
+    )
+    await message.answer(text, parse_mode="Markdown")
+
+# --- ADMIN XABAR YUBORISH BUYRUG'I ---
+@dp.message(Command("send"))
+async def broadcast_handler(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    text_to_send = message.text.replace("/send", "").strip()
+    
+    if not text_to_send:
+        await message.answer(
+            "⚠️️ Iltimos, buyruqdan keyin yubormoqchi bo'lgan xabaringizni yozing.\n\n"
+            "Masalan:\n`/send Texnik muammo uchun uzr so'raymiz !!! Botdan foydalanishingiz mumkin`", 
+            parse_mode="Markdown"
+        )
+        return
+
+    users = get_all_users()
+    success_count = 0
+    fail_count = 0
+
+    await message.answer(f"📢 Xabar yuborish boshlandi. Bazadagi barcha foydalanuvchilar soni: **{len(users)}**...")
+
+    for user_id in users:
+        try:
+            await bot.send_message(chat_id=user_id, text=text_to_send, parse_mode="Markdown")
+            success_count += 1
+            await asyncio.sleep(0.05)
+        except TelegramForbiddenError:
+            fail_count += 1
+        except Exception as e:
+            logging.error(f"{user_id} ga xabar yuborishda xatolik: {e}")
+            fail_count += 1
+
+    await message.answer(
+        f"✅ **Xabar yuborish yakunlandi!**\n\n"
+        f"🎯 Yetib bordi: **{success_count}**\n"
+        f"❌ Yetib bormadi (botni bloklaganlar): **{fail_count}**",
+        parse_mode="Markdown"
+    )
 
 # --- HANDLERS ---
 @dp.message(CommandStart())
@@ -191,7 +245,7 @@ async def check_callback(callback: types.CallbackQuery):
 async def refresh_stats_callback(callback: types.CallbackQuery):
     await show_main_menu(callback, callback.from_user.id)
 
-# --- WEB SERVER (RENDER PORT XATOSINI OLDINI OLISH UCHUN) ---
+# --- WEB SERVER ---
 async def handle(request):
     return web.Response(text="Bot is running!")
 
@@ -204,9 +258,17 @@ async def start_web_server():
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
 
+async def setup_bot_commands():
+    commands = [
+        BotCommand(command="start", description="Botni ishga tushirish"),
+        BotCommand(command="help", description="Yordam va ko'rsatmalar")
+    ]
+    await bot.set_my_commands(commands)
+
 async def main():
     init_db()
     logging.basicConfig(level=logging.INFO)
+    await setup_bot_commands()
     await start_web_server()
     await dp.start_polling(bot)
 
