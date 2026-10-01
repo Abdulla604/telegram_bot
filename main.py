@@ -9,7 +9,6 @@ from aiogram.exceptions import TelegramBadRequest
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8836453685:AAEJHWQHHv3Qni_k9dosQodq0cEUsG7PfSw")
 
-# Majburiy kanallar ro'yxati (Bot bu kanallarda ADMIN bo'lishi shart!)
 CHANNELS = [
     "@yuristkonsult0",
     "@Yangirenessansyoshlari"
@@ -21,7 +20,6 @@ REQUIRED_REFERRALS = 5
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# --- DATABASE ---
 def init_db():
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
@@ -57,7 +55,6 @@ def increment_referral(referrer_id: int):
     conn.commit()
     conn.close()
 
-# --- CHECK SUBSCRIPTION ---
 async def check_subscriptions(user_id: int) -> bool:
     for channel in CHANNELS:
         try:
@@ -77,7 +74,6 @@ def get_subscribe_keyboard():
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# --- HANDLERS ---
 @dp.message(CommandStart())
 async def start_handler(message: types.Message, command: CommandObject):
     user_id = message.from_user.id
@@ -145,6 +141,19 @@ async def check_callback(callback: types.CallbackQuery):
         if user and user[1]: 
             referrer_id = user[1]
             increment_referral(referrer_id)
+            
+            # Taklif qilgan odamga bildirishnoma yuborish
+            referrer_data = get_user(referrer_id)
+            new_count = referrer_data[2] if referrer_data else 0
+            try:
+                await bot.send_message(
+                    chat_id=referrer_id,
+                    text=f"🎉 **Bitta do'stingiz kanallarga obuna bo'ldi!**\nSiz taklif qilgan do'stlar soni: **{new_count} / {REQUIRED_REFERRALS}**",
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
+
             conn = sqlite3.connect("bot_database.db")
             conn.cursor().execute("UPDATE users SET referrer_id = NULL WHERE user_id = ?", (user_id,))
             conn.commit()
