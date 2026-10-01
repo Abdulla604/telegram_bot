@@ -8,20 +8,19 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8836453685:AAEJHWQHHv3Qni_k9dosQodq0cEUsG7PfSw")
 
-# Majburiy kanallar ro'yxati (Bot ikkala kanalda ham ADMIN bo'lishi shart!)
+# Majburiy kanallar (Bot ADMIN bo'lishi shart!)
 CHANNELS = [
     "@yuristkonsult0",
     "@Yangirenessansyoshlari"
 ]
 
-# Yopiq guruh havolasi va kerakli takliflar soni
 PRIVATE_GROUP_LINK = "https://t.me/+utM5W-bXIN1lOTk6"
 REQUIRED_REFERRALS = 5
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# --- DATABASE SETUP ---
+# DATABASE
 def init_db():
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
@@ -57,7 +56,6 @@ def increment_referral(referrer_id: int):
     conn.commit()
     conn.close()
 
-# --- HELPER FUNCTIONS ---
 async def check_subscriptions(user_id: int) -> bool:
     for channel in CHANNELS:
         try:
@@ -77,13 +75,11 @@ def get_subscribe_keyboard():
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# --- HANDLERS ---
 @dp.message(CommandStart())
 async def start_handler(message: types.Message, command: CommandObject):
     user_id = message.from_user.id
     args = command.args
 
-    # Referal ID o'g'irlash
     referrer_id = None
     if args and args.isdigit():
         possible_referrer = int(args)
@@ -93,11 +89,6 @@ async def start_handler(message: types.Message, command: CommandObject):
     user = get_user(user_id)
     if not user:
         add_user(user_id, referrer_id)
-        # Agar taklif qilgan odam bo'lsa va obuna bo'lsa
-        if referrer_id:
-            is_sub = await check_subscriptions(user_id)
-            if is_sub:
-                increment_referral(referrer_id)
 
     is_subscribed = await check_subscriptions(user_id)
     if not is_subscribed:
@@ -108,7 +99,7 @@ async def start_handler(message: types.Message, command: CommandObject):
     else:
         await show_main_menu(message, user_id)
 
-async def show_main_menu(message_or_callback, user_id: int):
+async def show_main_menu(target, user_id: int):
     bot_info = await bot.get_me()
     ref_link = f"https://t.me/{bot_info.username}?start={user_id}"
     
@@ -133,10 +124,10 @@ async def show_main_menu(message_or_callback, user_id: int):
         [InlineKeyboardButton(text="Hisobimni tekshirish 🔄", callback_data="refresh_stats")]
     ])
 
-    if isinstance(message_or_callback, types.Message):
-        await message_or_callback.answer(text, parse_mode="Markdown", reply_markup=kb)
+    if isinstance(target, types.Message):
+        await target.answer(text, parse_mode="Markdown", reply_markup=kb)
     else:
-        await message_or_callback.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
+        await target.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
 
 @dp.callback_query(F.data == "check_sub")
 async def check_callback(callback: types.CallbackQuery):
@@ -145,17 +136,18 @@ async def check_callback(callback: types.CallbackQuery):
 
     if is_subscribed:
         user = get_user(user_id)
-        # Agar yangi a'zo bo'lsa va uni kimdir taklif qilgan bo'lsa, taklif qilganga ochko beramiz
-        if user and user[1]: # referrer_id mavjud bo'lsa
+        if user and user[1]: 
             referrer_id = user[1]
             increment_referral(referrer_id)
-            # Referrer_id ni tozalash (takroran qo'shilmasligi uchun)
             conn = sqlite3.connect("bot_database.db")
             conn.cursor().execute("UPDATE users SET referrer_id = NULL WHERE user_id = ?", (user_id,))
             conn.commit()
             conn.close()
 
-        await callback.message.delete()
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
         await show_main_menu(callback, user_id)
     else:
         await callback.answer("Siz hali barcha kanallarga obuna bo'lmadingiz! ❌", show_alert=True)
