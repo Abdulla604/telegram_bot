@@ -9,7 +9,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramBadRequest
 
 # TO'G'RI TOKEN (Bot ID va ikki nuqtasi bilan!)
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8836453685:AAEC-knDgml84WHmsrL05IHKKOHxC7Gnv5Y")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8836453685:AAHaNHQwiKxheUbClheEpJQJcSXX9036kNY")
 
 CHANNELS = [
     "@yuristkonsult0",
