@@ -203,5 +203,51 @@ async def main():
     logging.basicConfig(level=logging.INFO)
     await dp.start_polling(bot)
 
+from aiohttp import web
+
+async def handle(request):
+    return web.Response(text="Bot is running!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+
+async def main():
+    init_db()
+    logging.basicConfig(level=logging.INFO)
+    
+    # Web serverni fonga tushiramiz (Render port xatosini oldini olish uchun)
+    await start_web_server()
+    
+    await dp.start_polling(bot)
+
+from aiohttp import web
+
+async def handle(request):
+    return web.Response(text="Bot is running!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+
+async def main():
+    init_db()
+    logging.basicConfig(level=logging.INFO)
+    
+    # Web serverni fonga tushiramiz (Render port xatosini oldini olish uchun)
+    await start_web_server()
+    
+    await dp.start_polling(bot)
+
 if __name__ == "__main__":
     asyncio.run(main())
