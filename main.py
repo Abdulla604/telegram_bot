@@ -5,30 +5,31 @@ from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import CommandStart
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# Token Environment Variable'dan olinadi (agar bo'lmasa, zaxira sifatida ishlatiladi)
+# Token muhit o'zgaruvchisidan olinadi, agar bo'lmasa zaxirasi ishlaydi
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8836453685:AAEJHWQHHv3Qni_k9dosQodq0cEUsG7PfSw")
 
-# Kanallar va yopiq guruh ro'yxati (Bot bu yerda ADMIN bo'lishi shart!)
+# Ochiq kanallar ro'yxati (Bot bu kanallarda ADMIN bo'lishi shart!)
 CHANNELS = [
     "@yuristkonsult0",
-    "@Yangirenessansyoshlari",
-    -1001234567890  # <- Yopiq guruhingizning real ID raqami
+    "@Yangirenessansyoshlari"
 ]
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# Obunani tekshirish funksiyasi
 async def check_subscriptions(user_id: int) -> bool:
-    for chat in CHANNELS:
+    for channel in CHANNELS:
         try:
-            member = await bot.get_chat_member(chat_id=chat, user_id=user_id)
+            member = await bot.get_chat_member(chat_id=channel, user_id=user_id)
             if member.status in ["left", "kicked"]:
                 return False
         except Exception as e:
-            logging.error(f"Obunani tekshirishda xatolik ({chat}): {e}")
+            logging.error(f"Obunani tekshirishda xatolik ({channel}): {e}")
             return False
     return True
 
+# Obuna tugmalarini yasash
 def get_subscribe_keyboard():
     buttons = [
         [InlineKeyboardButton(text="1-kanalga obuna bo'lish 📢", url="https://t.me/yuristkonsult0")],
@@ -38,6 +39,7 @@ def get_subscribe_keyboard():
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+# /start buyrug'i kelganda
 @dp.message(CommandStart())
 async def start_handler(message: types.Message):
     is_subscribed = await check_subscriptions(message.from_user.id)
@@ -50,6 +52,7 @@ async def start_handler(message: types.Message):
             reply_markup=get_subscribe_keyboard()
         )
 
+# "Tekshirish" tugmasi bosilganda
 @dp.callback_query(F.data == "check_sub")
 async def check_callback(callback: types.CallbackQuery):
     is_subscribed = await check_subscriptions(callback.from_user.id)
