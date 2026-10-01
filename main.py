@@ -16,57 +16,78 @@ CHANNELS = [
 
 PRIVATE_GROUP_LINK = "https://t.me/+utM5W-bXIN1lOTk6"
 REQUIRED_REFERRALS = 5
+DB_NAME = "bot_database.db"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # --- DATABASE MANAGEMENT ---
-DB_NAME = "bot_database.db"
-
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
+    # Foydalanuvchilar jadvali
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
+            referrer_id INTEGER
+        )
+    """)
+    # Referallar jadvali (kim kimni taklif qilganligi va obuna holati)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS referrals (
+            invited_id INTEGER PRIMARY KEY,
             referrer_id INTEGER,
-            referral_count INTEGER DEFAULT 0
+            is_confirmed INTEGER DEFAULT 0
         )
     """)
     conn.commit()
     conn.close()
 
-def get_user(user_id: int):
+def register_user(user_id: int, referrer_id: int = None):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, referrer_id, referral_count FROM users WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return row
-
-def register_or_update_user(user_id: int, referrer_id: int = None):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id, referrer_id FROM users WHERE user_id = ?", (user_id,))
-    existing_user = cursor.fetchone()
-
-    if not existing_user:
-        # Yangi foydalanuvchi bo'lsa, saqlaymiz
-        cursor.execute("INSERT INTO users (user_id, referrer_id, referral_count) VALUES (?, ?, 0)", (user_id, referrer_id))
-    else:
-        # Agar ilgari kirgan lekin hali obuna bo'lmagan bo'lsa, referrer_id ni yangilaymiz
-        if referrer_id and existing_user[1] is None:
-            cursor.execute("UPDATE users SET referrer_id = ? WHERE user_id = ?", (referrer_id, user_id))
+    cursor.execute("INSERT OR IGNORE INTO users (user_id, referrer_id) VALUES (?, ?)", (user_id, referrer_id))
+    
+    # Agar taklif qilgan odam bo'lsa va bu taklif birinchi marta saqlanayotgan bo'lsa
+    if referrer_id and referrer_id != user_id:
+        cursor.execute("INSERT OR IGNORE INTO referrals (invited_id, referrer_id, is_confirmed) VALUES (?, ?, 0)", (user_id, referrer_id))
     
     conn.commit()
     conn.close()
 
-def increment_referral(referrer_id: int):
+def confirm_referral(invited_id: int):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET referral_count = referral_count + 1 WHERE user_id = ?", (referrer_id,))
-    conn.commit()
+    cursor.execute("SELECT referrer_id FROM referrals WHERE invited_id = ?", (invited_id,))
+    row = cursor.fetchone()
+    
+    referrer_id = None
+    if row:
+        referrer_id = row[0]
+        cursor.execute("UPDATE referrals SET is_confirmed = 1 WHERE invited_id = ?", (invited_id,))
+        conn.commit()
+    
     conn.close()
+    return referrer_id
+
+async def count_valid_referrals(referrer_id: int) -> int:
+    """
+    Taklif qilingan barcha odamlarni qayta tekshiradi.
+    Faqatgina haligacha kanallarga obuna bo'lib turganlarini hisoblaydi!
+    """
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT invited_id FROM referrals WHERE referrer_id = ?", (referrer_id,))
+    invited_users = cursor.fetchall()
+    conn.close()
+
+    valid_count = 0
+    for row in invited_users:
+        invited_id = row[0]
+        if await check_subscriptions(invited_id):
+            valid_count += 1
+            
+    return valid_count
 
 # --- CHECK SUBSCRIPTION ---
 async def check_subscriptions(user_id: int) -> bool:
@@ -100,7 +121,7 @@ async def start_handler(message: types.Message, command: CommandObject):
         if possible_referrer != user_id:
             referrer_id = possible_referrer
 
-    register_or_update_user(user_id, referrer_id)
+    register_user(user_id, referrer_id)
 
     is_subscribed = await check_subscriptions(user_id)
     if not is_subscribed:
@@ -115,8 +136,8 @@ async def show_main_menu(target, user_id: int):
     bot_info = await bot.get_me()
     ref_link = f"https://t.me/{bot_info.username}?start={user_id}"
     
-    user = get_user(user_id)
-    ref_count = user[2] if user else 0
+    # Oldingi taklif qilingan barcha faol foydalanuvchilar qayta sanaladi
+    ref_count = await count_valid_referrals(user_id)
 
     if ref_count >= REQUIRED_REFERRALS:
         text = (
@@ -150,28 +171,15 @@ async def check_callback(callback: types.CallbackQuery):
     is_subscribed = await check_subscriptions(user_id)
 
     if is_subscribed:
-        user = get_user(user_id)
-        if user and user[1]: # Referrer ID mavjud bo'lsa
-            referrer_id = user[1]
-            
-            # Referal ballini oshiramiz
-            increment_referral(referrer_id)
-            
-            # Referrer ID ni tozalaymiz (takroran ball yozilmasligi uchun)
-            conn = sqlite3.connect(DB_NAME)
-            cursor = conn.cursor()
-            cursor.execute("UPDATE users SET referrer_id = NULL WHERE user_id = ?", (user_id,))
-            conn.commit()
-            conn.close()
-
-            # Taklif qilgan foydalanuvchiga xabar yuboramiz
-            referrer_user = get_user(referrer_id)
-            new_count = referrer_user[2] if referrer_user else 0
-            
+        referrer_id = confirm_referral(user_id)
+        
+        if referrer_id:
+            # Taklif qilgan foydalanuvchining umumiy faol takliflarini hisoblaymiz
+            new_count = await count_valid_referrals(referrer_id)
             try:
                 await bot.send_message(
                     chat_id=referrer_id,
-                    text=f"🎉 **Bitta do'stingiz kanallarga obuna bo'ldi!**\nSiz taklif qilgan do'stlar soni: **{new_count} / {REQUIRED_REFERRALS}**",
+                    text=f"🎉 **Bitta do'stingiz kanallarga obuna bo'ldi!**\nSiz taklif qilgan jami do'stlar soni: **{new_count} / {REQUIRED_REFERRALS}**",
                     parse_mode="Markdown"
                 )
             except Exception as e:
