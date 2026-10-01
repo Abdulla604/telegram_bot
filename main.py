@@ -7,7 +7,7 @@ from aiogram.filters import CommandStart, CommandObject
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramBadRequest
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8836453685:AAEJHWQHHv3Qni_k9dosQodq0cEUsG7PfSw")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8836453685:AAH-98gMP_sWlhgN_PT9PQoH_jKCN25lEsw")
 
 CHANNELS = [
     "@yuristkonsult0",
