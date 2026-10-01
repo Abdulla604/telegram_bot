@@ -21,41 +21,54 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # --- DATABASE MANAGEMENT ---
-def get_db():
-    conn = sqlite3.connect("bot_database.db", timeout=10)
-    return conn
+DB_NAME = "bot_database.db"
 
 def init_db():
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                referrer_id INTEGER,
-                referral_count INTEGER DEFAULT 0
-            )
-        """)
-        conn.commit()
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            referrer_id INTEGER,
+            referral_count INTEGER DEFAULT 0
+        )
+    """)
+    conn.commit()
+    conn.close()
 
 def get_user(user_id: int):
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id, referrer_id, referral_count FROM users WHERE user_id = ?", (user_id,))
-        return cursor.fetchone()
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, referrer_id, referral_count FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row
 
-def register_user(user_id: int, referrer_id: int = None):
-    with get_db() as conn:
-        cursor = conn.cursor()
-        # Foydalanuvchi allaqachon mavjud bo'lmasa, bazaga qo'shamiz
-        cursor.execute("INSERT OR IGNORE INTO users (user_id, referrer_id, referral_count) VALUES (?, ?, 0)", (user_id, referrer_id))
-        conn.commit()
+def register_or_update_user(user_id: int, referrer_id: int = None):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, referrer_id FROM users WHERE user_id = ?", (user_id,))
+    existing_user = cursor.fetchone()
+
+    if not existing_user:
+        # Yangi foydalanuvchi bo'lsa, saqlaymiz
+        cursor.execute("INSERT INTO users (user_id, referrer_id, referral_count) VALUES (?, ?, 0)", (user_id, referrer_id))
+    else:
+        # Agar ilgari kirgan lekin hali obuna bo'lmagan bo'lsa, referrer_id ni yangilaymiz
+        if referrer_id and existing_user[1] is None:
+            cursor.execute("UPDATE users SET referrer_id = ? WHERE user_id = ?", (referrer_id, user_id))
+    
+    conn.commit()
+    conn.close()
 
 def increment_referral(referrer_id: int):
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("UPDATE users SET referral_count = referral_count + 1 WHERE user_id = ?", (referrer_id,))
-        conn.commit()
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET referral_count = referral_count + 1 WHERE user_id = ?", (referrer_id,))
+    conn.commit()
+    conn.close()
 
+# --- CHECK SUBSCRIPTION ---
 async def check_subscriptions(user_id: int) -> bool:
     for channel in CHANNELS:
         try:
@@ -75,6 +88,7 @@ def get_subscribe_keyboard():
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+# --- HANDLERS ---
 @dp.message(CommandStart())
 async def start_handler(message: types.Message, command: CommandObject):
     user_id = message.from_user.id
@@ -86,9 +100,7 @@ async def start_handler(message: types.Message, command: CommandObject):
         if possible_referrer != user_id:
             referrer_id = possible_referrer
 
-    user = get_user(user_id)
-    if not user:
-        register_user(user_id, referrer_id)
+    register_or_update_user(user_id, referrer_id)
 
     is_subscribed = await check_subscriptions(user_id)
     if not is_subscribed:
@@ -139,19 +151,20 @@ async def check_callback(callback: types.CallbackQuery):
 
     if is_subscribed:
         user = get_user(user_id)
-        if user and user[1]:  # referrer_id mavjud bo'lsa
+        if user and user[1]: # Referrer ID mavjud bo'lsa
             referrer_id = user[1]
             
-            # 1. Referal sonini oshiramiz
+            # Referal ballini oshiramiz
             increment_referral(referrer_id)
             
-            # 2. Referrer_id ni tozalaymiz (qayta qo'shilmasligi uchun)
-            with get_db() as conn:
-                cursor = conn.cursor()
-                cursor.execute("UPDATE users SET referrer_id = NULL WHERE user_id = ?", (user_id,))
-                conn.commit()
+            # Referrer ID ni tozalaymiz (takroran ball yozilmasligi uchun)
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
+            cursor.execute("UPDATE users SET referrer_id = NULL WHERE user_id = ?", (user_id,))
+            conn.commit()
+            conn.close()
 
-            # 3. Taklif qilgan foydalanuvchiga xabar yuborish
+            # Taklif qilgan foydalanuvchiga xabar yuboramiz
             referrer_user = get_user(referrer_id)
             new_count = referrer_user[2] if referrer_user else 0
             
