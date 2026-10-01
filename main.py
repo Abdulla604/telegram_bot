@@ -9,7 +9,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 # TO'G'RI TOKEN
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8836453685:AAH-98gMP_sWlhgN_PT9PQoH_jKCN25lEsw")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8836453685:AAGu0qg24QbOaY3Ma9dn5ydp6kKHyXnEjUU")
 
 # ADMIN ID
 ADMIN_ID = 6505527953  
