@@ -2,11 +2,13 @@ import os
 import logging
 import asyncio
 import sqlite3
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import CommandStart, CommandObject
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramBadRequest
 
+# TO'G'RI TOKEN (Bot ID va ikki nuqtasi bilan!)
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8836453685:AAH-98gMP_sWlhgN_PT9PQoH_jKCN25lEsw")
 
 CHANNELS = [
@@ -25,14 +27,12 @@ dp = Dispatcher()
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    # Foydalanuvchilar jadvali
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             referrer_id INTEGER
         )
     """)
-    # Referallar jadvali (kim kimni taklif qilganligi va obuna holati)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS referrals (
             invited_id INTEGER PRIMARY KEY,
@@ -48,7 +48,6 @@ def register_user(user_id: int, referrer_id: int = None):
     cursor = conn.cursor()
     cursor.execute("INSERT OR IGNORE INTO users (user_id, referrer_id) VALUES (?, ?)", (user_id, referrer_id))
     
-    # Agar taklif qilgan odam bo'lsa va bu taklif birinchi marta saqlanayotgan bo'lsa
     if referrer_id and referrer_id != user_id:
         cursor.execute("INSERT OR IGNORE INTO referrals (invited_id, referrer_id, is_confirmed) VALUES (?, ?, 0)", (user_id, referrer_id))
     
@@ -71,10 +70,6 @@ def confirm_referral(invited_id: int):
     return referrer_id
 
 async def count_valid_referrals(referrer_id: int) -> int:
-    """
-    Taklif qilingan barcha odamlarni qayta tekshiradi.
-    Faqatgina haligacha kanallarga obuna bo'lib turganlarini hisoblaydi!
-    """
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT invited_id FROM referrals WHERE referrer_id = ?", (referrer_id,))
@@ -136,7 +131,6 @@ async def show_main_menu(target, user_id: int):
     bot_info = await bot.get_me()
     ref_link = f"https://t.me/{bot_info.username}?start={user_id}"
     
-    # Oldingi taklif qilingan barcha faol foydalanuvchilar qayta sanaladi
     ref_count = await count_valid_referrals(user_id)
 
     if ref_count >= REQUIRED_REFERRALS:
@@ -174,7 +168,6 @@ async def check_callback(callback: types.CallbackQuery):
         referrer_id = confirm_referral(user_id)
         
         if referrer_id:
-            # Taklif qilgan foydalanuvchining umumiy faol takliflarini hisoblaymiz
             new_count = await count_valid_referrals(referrer_id)
             try:
                 await bot.send_message(
@@ -198,13 +191,7 @@ async def check_callback(callback: types.CallbackQuery):
 async def refresh_stats_callback(callback: types.CallbackQuery):
     await show_main_menu(callback, callback.from_user.id)
 
-async def main():
-    init_db()
-    logging.basicConfig(level=logging.INFO)
-    await dp.start_polling(bot)
-
-from aiohttp import web
-
+# --- WEB SERVER (RENDER PORT XATOSINI OLDINI OLISH UCHUN) ---
 async def handle(request):
     return web.Response(text="Bot is running!")
 
@@ -213,40 +200,14 @@ async def start_web_server():
     app.router.add_get('/', handle)
     runner = web.AppRunner(app)
     await runner.setup()
-    port = int(os.getenv("PORT", 8080))
+    port = int(os.getenv("PORT", 10000))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
 
 async def main():
     init_db()
     logging.basicConfig(level=logging.INFO)
-    
-    # Web serverni fonga tushiramiz (Render port xatosini oldini olish uchun)
     await start_web_server()
-    
-    await dp.start_polling(bot)
-
-from aiohttp import web
-
-async def handle(request):
-    return web.Response(text="Bot is running!")
-
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get('/', handle)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.getenv("PORT", 8080))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-
-async def main():
-    init_db()
-    logging.basicConfig(level=logging.INFO)
-    
-    # Web serverni fonga tushiramiz (Render port xatosini oldini olish uchun)
-    await start_web_server()
-    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
