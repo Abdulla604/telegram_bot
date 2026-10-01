@@ -11,7 +11,6 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 # TO'G'RI TOKEN
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8836453685:AAGu0qg24QbOaY3Ma9dn5ydp6kKHyXnEjUU")
 
-# ADMIN ID
 ADMIN_ID = 6505527953  
 
 CHANNELS = [
@@ -76,7 +75,8 @@ async def count_valid_referrals(referrer_id: int) -> int:
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id = ? AND is_confirmed = 1", (referrer_id,))
-    count = cursor.fetchone()[0]
+    row = cursor.fetchone()
+    count = row[0] if row else 0
     conn.close()
     return count
 
@@ -108,7 +108,7 @@ def get_subscribe_keyboard():
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# --- HELP COMMAND ---
+# --- COMMAND HANDLERS ---
 @dp.message(Command("help"))
 async def help_handler(message: types.Message):
     text = (
@@ -118,27 +118,21 @@ async def help_handler(message: types.Message):
     )
     await message.answer(text, parse_mode="Markdown")
 
-# --- ADMIN XABAR YUBORISH BUYRUG'I ---
 @dp.message(Command("send"))
 async def broadcast_handler(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
 
     text_to_send = message.text.replace("/send", "").strip()
-    
     if not text_to_send:
-        await message.answer(
-            "⚠️️ Iltimos, buyruqdan keyin yubormoqchi bo'lgan xabaringizni yozing.\n\n"
-            "Masalan:\n`/send Texnik muammo uchun uzr so'raymiz !!! Botdan foydalanishingiz mumkin`", 
-            parse_mode="Markdown"
-        )
+        await message.answer("⚠️ Iltimos, buyruqdan keyin matn yozing.", parse_mode="Markdown")
         return
 
     users = get_all_users()
     success_count = 0
     fail_count = 0
 
-    await message.answer(f"📢 Xabar yuborish boshlandi. Bazadagi barcha foydalanuvchilar soni: **{len(users)}**...")
+    await message.answer(f"📢 Xabar yuborish boshlandi. Barcha foydalanuvchilar: **{len(users)}**...")
 
     for user_id in users:
         try:
@@ -147,18 +141,14 @@ async def broadcast_handler(message: types.Message):
             await asyncio.sleep(0.05)
         except TelegramForbiddenError:
             fail_count += 1
-        except Exception as e:
-            logging.error(f"{user_id} ga xabar yuborishda xatolik: {e}")
+        except Exception:
             fail_count += 1
 
     await message.answer(
-        f"✅ **Xabar yuborish yakunlandi!**\n\n"
-        f"🎯 Yetib bordi: **{success_count}**\n"
-        f"❌ Yetib bormadi (botni bloklaganlar): **{fail_count}**",
+        f"✅ **Xabar yuborildi!**\n\n🎯 Yetib bordi: **{success_count}**\n❌ Bloklaganlar: **{fail_count}**",
         parse_mode="Markdown"
     )
 
-# --- HANDLERS ---
 @dp.message(CommandStart())
 async def start_handler(message: types.Message, command: CommandObject):
     user_id = message.from_user.id
@@ -245,9 +235,9 @@ async def check_callback(callback: types.CallbackQuery):
 async def refresh_stats_callback(callback: types.CallbackQuery):
     await show_main_menu(callback, callback.from_user.id)
 
-# --- WEB SERVER ---
+# --- WEB SERVER (RENDER STABILITY) ---
 async def handle(request):
-    return web.Response(text="Bot is running!")
+    return web.Response(text="Bot is online and running!")
 
 async def start_web_server():
     app = web.Application()
