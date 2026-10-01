@@ -20,40 +20,41 @@ REQUIRED_REFERRALS = 5
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# --- DATABASE MANAGEMENT ---
+def get_db():
+    conn = sqlite3.connect("bot_database.db", timeout=10)
+    return conn
+
 def init_db():
-    conn = sqlite3.connect("bot_database.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            referrer_id INTEGER,
-            referral_count INTEGER DEFAULT 0
-        )
-    """)
-    conn.commit()
-    conn.close()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                referrer_id INTEGER,
+                referral_count INTEGER DEFAULT 0
+            )
+        """)
+        conn.commit()
 
 def get_user(user_id: int):
-    conn = sqlite3.connect("bot_database.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id, referrer_id, referral_count FROM users WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return row
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id, referrer_id, referral_count FROM users WHERE user_id = ?", (user_id,))
+        return cursor.fetchone()
 
-def add_user(user_id: int, referrer_id: int = None):
-    conn = sqlite3.connect("bot_database.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO users (user_id, referrer_id, referral_count) VALUES (?, ?, 0)", (user_id, referrer_id))
-    conn.commit()
-    conn.close()
+def register_user(user_id: int, referrer_id: int = None):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        # Foydalanuvchi allaqachon mavjud bo'lmasa, bazaga qo'shamiz
+        cursor.execute("INSERT OR IGNORE INTO users (user_id, referrer_id, referral_count) VALUES (?, ?, 0)", (user_id, referrer_id))
+        conn.commit()
 
 def increment_referral(referrer_id: int):
-    conn = sqlite3.connect("bot_database.db")
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET referral_count = referral_count + 1 WHERE user_id = ?", (referrer_id,))
-    conn.commit()
-    conn.close()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET referral_count = referral_count + 1 WHERE user_id = ?", (referrer_id,))
+        conn.commit()
 
 async def check_subscriptions(user_id: int) -> bool:
     for channel in CHANNELS:
@@ -87,7 +88,7 @@ async def start_handler(message: types.Message, command: CommandObject):
 
     user = get_user(user_id)
     if not user:
-        add_user(user_id, referrer_id)
+        register_user(user_id, referrer_id)
 
     is_subscribed = await check_subscriptions(user_id)
     if not is_subscribed:
@@ -138,26 +139,30 @@ async def check_callback(callback: types.CallbackQuery):
 
     if is_subscribed:
         user = get_user(user_id)
-        if user and user[1]: 
+        if user and user[1]:  # referrer_id mavjud bo'lsa
             referrer_id = user[1]
+            
+            # 1. Referal sonini oshiramiz
             increment_referral(referrer_id)
             
-            # Taklif qilgan odamga bildirishnoma yuborish
-            referrer_data = get_user(referrer_id)
-            new_count = referrer_data[2] if referrer_data else 0
+            # 2. Referrer_id ni tozalaymiz (qayta qo'shilmasligi uchun)
+            with get_db() as conn:
+                cursor = conn.cursor()
+                cursor.execute("UPDATE users SET referrer_id = NULL WHERE user_id = ?", (user_id,))
+                conn.commit()
+
+            # 3. Taklif qilgan foydalanuvchiga xabar yuborish
+            referrer_user = get_user(referrer_id)
+            new_count = referrer_user[2] if referrer_user else 0
+            
             try:
                 await bot.send_message(
                     chat_id=referrer_id,
                     text=f"🎉 **Bitta do'stingiz kanallarga obuna bo'ldi!**\nSiz taklif qilgan do'stlar soni: **{new_count} / {REQUIRED_REFERRALS}**",
                     parse_mode="Markdown"
                 )
-            except Exception:
-                pass
-
-            conn = sqlite3.connect("bot_database.db")
-            conn.cursor().execute("UPDATE users SET referrer_id = NULL WHERE user_id = ?", (user_id,))
-            conn.commit()
-            conn.close()
+            except Exception as e:
+                logging.error(f"Bildirishnoma yuborishda xatolik: {e}")
 
         try:
             await callback.message.delete()
