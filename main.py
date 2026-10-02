@@ -1,75 +1,98 @@
 import os
-import sqlite3
 import logging
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import CommandStart, Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-
-# Loglarni sozlash
-logging.basicConfig(level=logging.INFO)
+import asyncio
+import sqlite3
+from aiohttp import web
+from aiogram import Bot, Dispatcher, F, types
+from aiogram.filters import CommandStart, CommandObject, Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 # 1. ATROF-MUHIT O'ZGARUVCHILARI VA SOZLAMALAR
+# Token xavfsizligi uchun zaxira (default) qiymat olib tashlandi
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = 6505527953
 
-# Bot ADMIN bo'lgan va API orqali avtomatik tekshiriladigan kanal
+ADMIN_ID = 6505527953  
+
+# Faqat bot ADMIN bo'lgan 1-kanalni API orqali tekshirish
 ADMIN_CHANNELS = ["@yuristkonsult0"]
-CHANNELS = ADMIN_CHANNELS  # NameError xatosining oldini olish uchun
+CHANNELS = ADMIN_CHANNELS  # NameError va tushunmovchiliklarning oldini olish uchun
 
-# Qo'lda ulanadigan 2-kanal va taklif havolalari
+# Qo'lda ulanadigan 2-kanal va guruh havolalari
 SECOND_CHANNEL_LINK = "https://t.me/Yangirenessansyoshlari"
 PRIVATE_GROUP_LINK = "https://t.me/+utM5W-bXIN1lOTk6"
-
 REQUIRED_REFERRALS = 5
 DB_NAME = "bot_database.db"
 
-# Bot va Dispatcher ob'ektlarini yaratish
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 
-# 2. MA'LUMOTLAR BAZASI (SQLITE) BILAN ISHLASH
+# --- DATABASE MANAGEMENT ---
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('''
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
-            referrer_id INTEGER,
-            referrals_count INTEGER DEFAULT 0,
-            has_bought INTEGER DEFAULT 0
+            referrer_id INTEGER
         )
-    ''')
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS referrals (
+            invited_id INTEGER PRIMARY KEY,
+            referrer_id INTEGER,
+            is_confirmed INTEGER DEFAULT 0
+        )
+    """)
     conn.commit()
     conn.close()
 
-init_db()
-
-
-def add_user(user_id: int, referrer_id: int = None):
+def register_user(user_id: int, referrer_id: int = None):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
-    user = cursor.fetchone()
+    cursor.execute("INSERT OR IGNORE INTO users (user_id, referrer_id) VALUES (?, ?)", (user_id, referrer_id))
     
-    if not user:
-        cursor.execute("INSERT INTO users (user_id, referrer_id) VALUES (?, ?)", (user_id, referrer_id))
-        if referrer_id and referrer_id != user_id:
-            cursor.execute("UPDATE users SET referrals_count = referrals_count + 1 WHERE user_id = ?", (referrer_id,))
-        conn.commit()
+    if referrer_id and referrer_id != user_id:
+        cursor.execute("INSERT OR IGNORE INTO referrals (invited_id, referrer_id, is_confirmed) VALUES (?, ?, 0)", (user_id, referrer_id))
+    
+    conn.commit()
     conn.close()
 
-
-def get_user_data(user_id: int):
+def confirm_referral(invited_id: int):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT referrals_count, has_bought FROM users WHERE user_id = ?", (user_id,))
-    result = cursor.fetchone()
+    cursor.execute("SELECT referrer_id FROM referrals WHERE invited_id = ?", (invited_id,))
+    row = cursor.fetchone()
+    
+    referrer_id = None
+    if row:
+        referrer_id = row[0]
+        cursor.execute("UPDATE referrals SET is_confirmed = 1 WHERE invited_id = ?", (invited_id,))
+        conn.commit()
+    
     conn.close()
-    return result if result else (0, 0)
+    return referrer_id
+
+async def count_valid_referrals(referrer_id: int) -> int:
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id = ? AND is_confirmed = 1", (referrer_id,))
+    row = cursor.fetchone()
+    count = row[0] if row else 0
+    conn.close()
+    return count
+
+def get_all_users():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM users")
+    users = cursor.fetchall()
+    conn.close()
+    return [u[0] for u in users]
 
 
-# 3. OBUNA VA TUGMALARNI SOZLASH
+# --- CHECK SUBSCRIPTION ---
 async def check_subscriptions(user_id: int) -> bool:
     for channel in ADMIN_CHANNELS:
         try:
@@ -81,101 +104,173 @@ async def check_subscriptions(user_id: int) -> bool:
             return False
     return True
 
-
 def get_subscribe_keyboard():
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    buttons = [
         [InlineKeyboardButton(text="1-kanalga obuna bo'lish 📢", url="https://t.me/yuristkonsult0")],
         [InlineKeyboardButton(text="2-kanalga obuna bo'lish 📢", url=SECOND_CHANNEL_LINK)],
         [InlineKeyboardButton(text="Obunani tekshirish 🔄", callback_data="check_sub")]
-    ])
-    return keyboard
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-# 4. HANDLERLAR (BUYRUQLAR VA TUGMALAR)
+# --- COMMAND HANDLERS ---
+@dp.message(Command("help"))
+async def help_handler(message: types.Message):
+    text = (
+        "❓ **Yordam va ko'rsatmalar:**\n\n"
+        "Bot bo'yicha savollar yoki texnik muammolar yuzasidan adminga murojaat qilishingiz mumkin:\n"
+        "👉 @prepgrants"
+    )
+    await message.answer(text, parse_mode="Markdown")
+
+@dp.message(F.text == "Help os")
+async def help_button_handler(message: types.Message):
+    await help_handler(message)
+
+@dp.message(Command("send"))
+async def broadcast_handler(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    text_to_send = message.text.replace("/send", "").strip()
+    if not text_to_send:
+        await message.answer("⚠️ Iltimos, buyruqdan keyin matn yozing.", parse_mode="Markdown")
+        return
+
+    users = get_all_users()
+    success_count = 0
+    fail_count = 0
+
+    await message.answer(f"📢 Xabar yuborish boshlandi. Barcha foydalanuvchilar: **{len(users)}**...")
+
+    for user_id in users:
+        try:
+            await bot.send_message(chat_id=user_id, text=text_to_send, parse_mode="Markdown")
+            success_count += 1
+            await asyncio.sleep(0.05)
+        except TelegramForbiddenError:
+            fail_count += 1
+        except Exception:
+            fail_count += 1
+
+    await message.answer(
+        f"✅ **Xabar yuborildi!**\n\n🎯 Yetib bordi: **{success_count}**\n❌ Bloklaganlar: **{fail_count}**",
+        parse_mode="Markdown"
+    )
 
 @dp.message(CommandStart())
-async def start_handler(message: types.Message):
+async def start_handler(message: types.Message, command: CommandObject):
     user_id = message.from_user.id
-    args = message.text.split()
-    referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
+    args = command.args
 
-    add_user(user_id, referrer_id)
+    referrer_id = None
+    if args and args.isdigit():
+        possible_referrer = int(args)
+        if possible_referrer != user_id:
+            referrer_id = possible_referrer
+
+    register_user(user_id, referrer_id)
+
+    is_subscribed = await check_subscriptions(user_id)
+    if not is_subscribed:
+        await message.answer(
+            "Botdan foydalanish uchun avval quyidagi kanallarga obuna bo'ling:",
+            reply_markup=get_subscribe_keyboard()
+        )
+    else:
+        await show_main_menu(message, user_id)
+
+async def show_main_menu(target, user_id: int):
+    bot_info = await bot.get_me()
+    ref_link = f"https://t.me/{bot_info.username}?start={user_id}"
+    
+    ref_count = await count_valid_referrals(user_id)
+
+    if ref_count >= REQUIRED_REFERRALS:
+        text = (
+            f"🎉 **Tabriklaymiz!** Siz {ref_count}/{REQUIRED_REFERRALS} ta odam taklif qildingiz.\n\n"
+            f"Siz uchun yopiq guruh havolasi ochiq:\n👉 {PRIVATE_GROUP_LINK}"
+        )
+    else:
+        text = (
+            f"✅ **Kanallarga obuna bo'lgansiz!**\n\n"
+            f"🔒 Yopiq guruhga kirish uchun kamida **{REQUIRED_REFERRALS} ta do'stingizni** taklif qilishingiz kerak.\n\n"
+            f"Siz taklif qilgan odamlar soni: **{ref_count} / {REQUIRED_REFERRALS}**\n\n"
+            f"Sizning shaxsiy taklif havolangiz:\n`{ref_link}`\n\n"
+            f"Ushbu havolani do'stlaringizga yuboring!"
+        )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Hisobimni tekshirish 🔄", callback_data="refresh_stats")]
+    ])
+
+    if isinstance(target, types.Message):
+        await target.answer(text, parse_mode="Markdown", reply_markup=kb)
+    else:
+        try:
+            await target.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
+        except TelegramBadRequest:
+            await target.message.answer(text, parse_mode="Markdown", reply_markup=kb)
+
+@dp.callback_query(F.data == "check_sub")
+async def check_callback(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
     is_subscribed = await check_subscriptions(user_id)
 
     if is_subscribed:
-        ref_link = f"https://t.me/{(await bot.get_me()).username}?start={user_id}"
-        refs_count, _ = get_user_data(user_id)
+        referrer_id = confirm_referral(user_id)
         
-        await message.answer(
-            f"Xush kelibsiz! 👋\n\n"
-            f"🔗 Sizning referal havolangiz:\n`{ref_link}`\n\n"
-            f"👥 Siz taklif qilgan do'stlar: **{refs_count}**/5\n\n"
-            f"Botdan to'liq foydalanishingiz mumkin!",
-            parse_mode="Markdown"
-        )
+        if referrer_id:
+            new_count = await count_valid_referrals(referrer_id)
+            try:
+                await bot.send_message(
+                    chat_id=referrer_id,
+                    text=f"🎉 **Bitta do'stingiz kanallarga obuna bo'ldi!**\nSiz taklif qilgan jami do'stlar soni: **{new_count} / {REQUIRED_REFERRALS}**",
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                logging.error(f"Bildirishnoma yuborishda xatolik: {e}")
+
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+            
+        await show_main_menu(callback, user_id)
     else:
-        await message.answer(
-            "Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:",
-            reply_markup=get_subscribe_keyboard()
-        )
+        await callback.answer("Siz hali 1-kanalga obuna bo'lmadingiz! ❌", show_alert=True)
+
+@dp.callback_query(F.data == "refresh_stats")
+async def refresh_stats_callback(callback: types.CallbackQuery):
+    await show_main_menu(callback, callback.from_user.id)
 
 
-@dp.callback_query(F.data == "check_sub")
-async def check_sub_callback(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    if await check_subscriptions(user_id):
-        await callback.message.delete()
-        await callback.message.answer("Rahmat! Obunangiz tasdiqlandi. /start buyrug'ini bosing.")
-    else:
-        await callback.answer("Siz hali 1-kanalga obuna bo'lmadingiz!", show_alert=True)
+# --- WEB SERVER (RENDER STABILITY) ---
+async def handle(request):
+    return web.Response(text="Bot is online and running!")
 
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
 
-@dp.message(Command("buy_guide"))
-async def buy_guide_handler(message: types.Message):
-    user_id = message.from_user.id
-    user_name = message.from_user.full_name
-    
-    # Adminga so'rov yuborish
-    admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Tasdiqlash ✅", callback_data=f"approve_{user_id}")]
-    ])
-    
-    await bot.send_message(
-        chat_id=ADMIN_ID,
-        text=f"💳 **Yangi to'lov so'rovi!**\nFoydalanuvchi: {user_name} (`{user_id}`)",
-        reply_markup=admin_keyboard,
-        parse_mode="Markdown"
-    )
-    
-    await message.answer("To'lov so'rovingiz adminga yuborildi. Tasdiqlangach PDF qo'llanma yuboriladi.")
+async def setup_bot_commands():
+    commands = [
+        BotCommand(command="start", description="Botni ishga tushirish"),
+        BotCommand(command="help", description="Yordam va ko'rsatmalar")
+    ]
+    await bot.set_my_commands(commands)
 
+async def main():
+    init_db()
+    logging.basicConfig(level=logging.INFO)
+    await setup_bot_commands()
+    await start_web_server()
+    await dp.start_polling(bot)
 
-@dp.callback_query(F.data.startswith("approve_"))
-async def approve_payment(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        return
-    
-    target_user_id = int(callback.data.split("_")[1])
-    
-    # Bazada statusni yangilash
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET has_bought = 1 WHERE user_id = ?", (target_user_id,))
-    conn.commit()
-    conn.close()
-
-    # Foydalanuvchiga xabar yuborish
-    await bot.send_message(
-        chat_id=target_user_id,
-        text=f"To'lovingiz tasdiqlandi! 🎉\nPDF qo'llanma va yopiq guruh havolasi: {PRIVATE_GROUP_LINK}"
-    )
-    
-    await callback.message.edit_text("To'lov tasdiqlandi va foydalanuvchiga xabar yuborildi ✅")
-
-
-# 5. BOTNI ISHGA TUSHIRISH
 if __name__ == "__main__":
-    import asyncio
-    async def main():
-        await dp.start_polling(bot)
     asyncio.run(main())
