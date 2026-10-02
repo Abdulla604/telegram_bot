@@ -26,8 +26,7 @@ async def check_subscriptions(user_id: int) -> bool:
             logging.error(f"Obuna tekshirishda xatolik ({channel}): {e}")
             return False
     return True
-]
-
+    
 PRIVATE_GROUP_LINK = "https://t.me/+utM5W-bXIN1lOTk6"
 REQUIRED_REFERRALS = 5
 DB_NAME = "bot_database.db"
